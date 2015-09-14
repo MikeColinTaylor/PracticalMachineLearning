@@ -1,0 +1,123 @@
+---
+title: "Practical Machine Learning Course Project"
+author: "Mike Taylor"
+date: "14 September 2015"
+output: html_document
+---
+
+
+##Load packages and files
+
+First of all I am going to create a working directory, load required packages and download and load the train and test data sets.
+
+```{r load packages and files, cache = TRUE}
+
+setwd("G:/Coursera/PracticalMachineLearning")
+
+options(stringsAsFactors = FALSE)
+
+library(caret)
+
+#set the random number seed to ensure reproducibility
+set.seed(10)
+
+
+download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv", destfile = "data/training.csv")
+download.file("http://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv", destfile = "data/testing.csv")
+
+
+train <- read.csv("data/training.csv")
+test <- read.csv("data/testing.csv")
+
+```
+
+
+##Preprocessing
+
+The file contains several columns relating to the person doing the exercise, and several timestamps. These will be dropped as they are unlikely to have any predictive power. A large number of variables are loaded as character due to missing values, so all are converted to numeric. Any missing values in both the training and test set are replaced with the mean of that variable in the training dataset. Finally, any variables with near zero variance are removed.
+
+```{r preprocess the data, cache = TRUE}
+
+#drop record numbers, user and time variables
+train <- train[ , -(1:7)]
+test <- test[ , -(1:7)]
+
+#convert classe to a factor
+train$classe <- factor(train$classe)
+
+#convert all variables to numeric
+#set missings equal to the mean
+for (i in 1:(ncol(train) - 1)) {
+  train[ , i] <- suppressWarnings(as.numeric(train[ , i]))
+  trainMean <- mean(train[ , i], na.rm = TRUE)
+  train[is.na(train[ , i]) , i] <- trainMean
+  test[is.na(test[ , i]) , i] <- trainMean
+}
+
+#Remove variables with near zero variance
+nzv <- nearZeroVar(train, saveMetrics = TRUE)
+
+train <- train[ , !nzv$nzv]
+test <- test[ , !nzv$nzv]
+
+```
+
+
+##Run the prediction algorithm
+
+I am going to train a gradient boosting machine to predict the classe variable. This usually works well with the raw data so I am not going to try and add or transform any additional data features. I am holding back 5000 records from the train data to check the cross validation provided by the caret package bootstrapping. As the caret package tries several different parameters which can take some time I am going to first run the train function on just 1000 records. I will then use the best parameters on the full training dataset for the final model.
+
+```{r train the model, cache = TRUE}
+
+#Keep 5000 back to cross validate
+validationRows <- sample(nrow(train), 5000)
+
+validation <- train[validationRows, ]
+trainFinal <- train[-validationRows, ]
+
+#Run train on small subset to find best parameters and save on processing time
+gbmModelOne <- train(classe ~ ., data = trainFinal[sample(nrow(trainFinal), 1000) , ], method = "gbm", verbose = FALSE)
+print(gbmModelOne)
+
+#Create grid with best parameters
+grid <- data.frame(n.trees = 150, interaction.depth = 3, shrinkage = 0.1, n.minobsinnode = 10)
+
+#Use gradient boosting machines to predict the classe variable
+gbmModelFinal <- train(classe ~ ., data = trainFinal[ , ], method = "gbm", tuneGrid = grid, verbose = FALSE)
+
+print(gbmModelFinal)
+
+```
+Out of bag accuracy estimate is 0.957, therefore the out of sample error should be around 4.3%.
+
+##Cross validation and test predictions
+
+Now I will predict classe on my validation data, and print a confusion matrix to check how well the model is working. Then I will output the test predictions ready to upload for checking.
+
+```{r cross validation, cache = TRUE}
+
+#Cross validate the error estimate
+validationPredictions <- predict(gbmModelFinal, newdata = validation)
+
+confusionMatrix(validationPredictions, validation$classe)
+
+```
+
+Cross validated accuracy is higher, which is good! Now to predict for the test set and output...
+
+```{r output predictions, cache = TRUE}
+#Output test set predictions
+finalPredictions <- predict(gbmModelFinal, newdata = test)
+
+pml_write_files = function(x){
+  n = length(x)
+  for(i in 1:n){
+    filename = paste0("output/problem_id_", i, ".txt")
+    write.table(x[i], file=filename, quote=FALSE, row.names=FALSE, col.names=FALSE)
+  }
+}
+  
+pml_write_files(finalPredictions)
+
+```
+
